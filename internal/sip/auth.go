@@ -1,7 +1,7 @@
 // Digest authentication for the SIP gateway.
 //
-// This implements the MD5 qop=auth flavour that Linphone and comparable clients
-// use. It is the only thing standing between a LAN-reachable SIP port and
+// 使用 RFC 8760 / RFC 7616 的 SHA-256、qop=auth，不提供 MD5 回退。
+// It is the only thing standing between a LAN-reachable SIP port and
 // someone placing calls on the operator's SIM, so the verification path is
 // written to fail closed: an unparsable header, a stale nonce, an unknown
 // username and a wrong password all produce the same outcome.
@@ -9,11 +9,11 @@ package sip
 
 import (
 	"crypto/hmac"
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -113,29 +113,33 @@ func splitAuthParams(value string) []string {
 	return parts
 }
 
-// DigestResponse computes the RFC 2617 response hash. It is exported so tests
-// and a future outbound-registration path can produce the same value.
+const digestAlgorithm = "SHA-256"
+
+// DigestResponse 计算 RFC 7616 的 SHA-256、qop=auth 响应。
+// 不支持的算法或不完整的 qop 参数返回空字符串，校验方必须拒绝。
 func DigestResponse(credentials Credentials, method, uri string, challenge Challenge) string {
+	if !strings.EqualFold(challenge.Algorithm, digestAlgorithm) ||
+		!strings.EqualFold(challenge.QOP, "auth") || challenge.CNonce == "" || len(challenge.NonceCount) != 8 {
+		return ""
+	}
+	count, err := strconv.ParseUint(challenge.NonceCount, 16, 32)
+	if err != nil || count == 0 {
+		return ""
+	}
 	realm := challenge.Realm
 	if realm == "" {
 		realm = credentials.Realm
 	}
-	ha1 := md5hex(credentials.Username + ":" + realm + ":" + credentials.Password)
-	ha2 := md5hex(strings.ToUpper(method) + ":" + uri)
-	if challenge.QOP == "auth" {
-		count := challenge.NonceCount
-		if count == "" {
-			count = "00000001"
-		}
-		return md5hex(strings.Join([]string{
-			ha1, challenge.Nonce, count, challenge.CNonce, "auth", ha2,
-		}, ":"))
-	}
-	return md5hex(ha1 + ":" + challenge.Nonce + ":" + ha2)
+	// RFC 7616 §3.4.2 规定了协议摘要的格式；它不是密码存储哈希。
+	ha1 := sha256hex(credentials.Username + ":" + realm + ":" + credentials.Password)
+	ha2 := sha256hex(strings.ToUpper(method) + ":" + uri)
+	return sha256hex(strings.Join([]string{
+		ha1, challenge.Nonce, challenge.NonceCount, challenge.CNonce, "auth", ha2,
+	}, ":"))
 }
 
-func md5hex(value string) string {
-	sum := md5.Sum([]byte(value))
+func sha256hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -212,8 +216,8 @@ func (auth *Authenticator) signNonce(issued int64) string {
 
 // ChallengeHeader builds a WWW-Authenticate value.
 func (auth *Authenticator) ChallengeHeader() string {
-	return fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5, qop="auth"`,
-		auth.realm, auth.Nonce())
+	return fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=%s, qop="auth"`,
+		auth.realm, auth.Nonce(), digestAlgorithm)
 }
 
 // validNonce reports whether a nonce was issued by this process and is still
@@ -293,7 +297,7 @@ func (auth *Authenticator) Verify(message *Message, credentials Credentials, sou
 		method = message.Method
 	}
 	expected := DigestResponse(credentials, method, uri, challenge)
-	if !hmac.Equal([]byte(expected), []byte(strings.ToLower(challenge.Response))) {
+	if expected == "" || !hmac.Equal([]byte(expected), []byte(strings.ToLower(challenge.Response))) {
 		auth.recordFailure(source)
 		return ResultReject
 	}

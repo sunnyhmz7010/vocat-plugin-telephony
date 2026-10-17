@@ -144,15 +144,18 @@ func answerChallenge(t *testing.T, response *sip.Message, method, uri string) st
 	if err != nil {
 		t.Fatalf("could not read our own challenge: %v", err)
 	}
+	if challenge.Algorithm != "SHA-256" || challenge.QOP != "auth" {
+		t.Fatalf("unexpected digest parameters: algorithm=%q, qop=%q", challenge.Algorithm, challenge.QOP)
+	}
 	credentials := sip.Credentials{Username: "alice", Password: "s3cret", Realm: challenge.Realm}
 	answer := sip.Challenge{
 		Realm: challenge.Realm, Nonce: challenge.Nonce, Username: "alice",
-		URI: uri, QOP: "auth", CNonce: "cnonce", NonceCount: "00000001",
+		URI: uri, Algorithm: challenge.Algorithm, QOP: challenge.QOP, CNonce: "cnonce", NonceCount: "00000001",
 	}
 	answer.Response = sip.DigestResponse(credentials, method, uri, answer)
 	return fmt.Sprintf(`Digest username="alice", realm="%s", nonce="%s", uri="%s", `+
-		`response="%s", qop=auth, nc=00000001, cnonce="cnonce"`,
-		answer.Realm, answer.Nonce, uri, answer.Response)
+		`response="%s", algorithm=%s, qop=auth, nc=00000001, cnonce="cnonce"`,
+		answer.Realm, answer.Nonce, uri, answer.Response, answer.Algorithm)
 }
 
 const phoneOfferTemplate = "v=0\r\n" +
@@ -239,19 +242,45 @@ func TestWrongPasswordIsRechallengedNotAccepted(t *testing.T) {
 	}
 	bad := sip.Challenge{
 		Realm: parsed.Realm, Nonce: parsed.Nonce, Username: "alice",
-		URI: "sip:vocat", QOP: "auth", CNonce: "c", NonceCount: "00000001",
+		URI: "sip:vocat", Algorithm: parsed.Algorithm, QOP: "auth", CNonce: "c", NonceCount: "00000001",
 	}
 	bad.Response = sip.DigestResponse(
 		sip.Credentials{Username: "alice", Password: "wrong", Realm: parsed.Realm},
 		"REGISTER", "sip:vocat", bad)
 	authHeader := fmt.Sprintf(`Digest username="alice", realm="%s", nonce="%s", uri="sip:vocat", `+
-		`response="%s", qop=auth, nc=00000001, cnonce="c"`, bad.Realm, bad.Nonce, bad.Response)
+		`response="%s", algorithm=%s, qop=auth, nc=00000001, cnonce="c"`,
+		bad.Realm, bad.Nonce, bad.Response, bad.Algorithm)
 
 	// A wrong password gets a fresh challenge rather than 403, so a user who
 	// mistyped can retry without reconfiguring the client.
 	exchange(t, phone, registerRaw(phone, 2, authHeader, ""), isResponse(401))
 	if gateway.Status().Registered {
 		t.Fatal("a wrong password created a binding")
+	}
+}
+
+func TestRegistrationRejectsDigestDowngrade(t *testing.T) {
+	for name, change := range map[string]struct{ old, replacement string }{
+		"MD5":               {"algorithm=SHA-256", "algorithm=MD5"},
+		"implicit MD5":      {", algorithm=SHA-256", ""},
+		"unknown algorithm": {"algorithm=SHA-256", "algorithm=SHA-1"},
+		"missing qop":       {", qop=auth", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gateway, _ := startGateway(t, nil)
+			phone, err := newSoftphone(gateway.Status().Address)
+			if err != nil {
+				t.Fatalf("newSoftphone() error = %v", err)
+			}
+			defer phone.Close()
+			challenge := exchange(t, phone, registerRaw(phone, 1, "", ""), isResponse(401))
+			header := answerChallenge(t, challenge, "REGISTER", "sip:vocat")
+			header = strings.Replace(header, change.old, change.replacement, 1)
+			exchange(t, phone, registerRaw(phone, 2, header, ""), isResponse(401))
+			if gateway.Status().Registered {
+				t.Fatal("unsupported digest parameters created a binding")
+			}
+		})
 	}
 }
 

@@ -17,12 +17,12 @@ func authorizedRegister(t *testing.T, auth *Authenticator, credentials Credentia
 	uri := "sip:vocat.local"
 	challenge := Challenge{
 		Realm: auth.Realm(), Nonce: nonce, Username: credentials.Username,
-		URI: uri, QOP: "auth", CNonce: "cnonce1", NonceCount: "00000001",
+		URI: uri, Algorithm: "SHA-256", QOP: "auth", CNonce: "cnonce1", NonceCount: "00000001",
 	}
 	challenge.Response = DigestResponse(credentials, "REGISTER", uri, challenge)
 	header := `Digest username="` + challenge.Username + `", realm="` + challenge.Realm +
 		`", nonce="` + challenge.Nonce + `", uri="` + uri +
-		`", response="` + challenge.Response + `", qop=auth, nc=00000001, cnonce="cnonce1"`
+		`", response="` + challenge.Response + `", algorithm=SHA-256, qop=auth, nc=00000001, cnonce="cnonce1"`
 
 	message, err := Parse([]byte("REGISTER " + uri + " SIP/2.0\r\n" +
 		"CSeq: 1 REGISTER\r\n" +
@@ -41,6 +41,23 @@ func TestVerifyAcceptsCorrectCredentials(t *testing.T) {
 	message := authorizedRegister(t, auth, testCredentials(), auth.Nonce())
 	if got := auth.Verify(message, testCredentials(), "192.168.1.50:5060"); got != ResultOK {
 		t.Fatalf("Verify() = %v, want ResultOK", got)
+	}
+}
+
+func TestDigestResponseRFC7616SHA256(t *testing.T) {
+	// RFC 7616 §3.9.1 的固定向量，避免生成端和校验端使用同一错误算法仍然通过。
+	credentials := Credentials{
+		Username: "Mufasa", Password: "Circle of Life", Realm: "http-auth@example.org",
+	}
+	challenge := Challenge{
+		Realm: credentials.Realm, Algorithm: "SHA-256", QOP: "auth",
+		Nonce:      "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v",
+		CNonce:     "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ",
+		NonceCount: "00000001",
+	}
+	const want = "753927fa0e85d155564e2e272a28d1802ca10daf4496794697cf8db5856cb6c1"
+	if got := DigestResponse(credentials, "GET", "/dir/index.html", challenge); got != want {
+		t.Fatalf("DigestResponse() = %q, want RFC 7616 response %q", got, want)
 	}
 }
 
@@ -182,13 +199,13 @@ func TestProxyAuthorizationHeaderIsAccepted(t *testing.T) {
 	uri := "sip:vocat.local"
 	challenge := Challenge{
 		Realm: auth.Realm(), Nonce: auth.Nonce(), Username: credentials.Username,
-		URI: uri, QOP: "auth", CNonce: "c", NonceCount: "00000001",
+		URI: uri, Algorithm: "SHA-256", QOP: "auth", CNonce: "c", NonceCount: "00000001",
 	}
 	challenge.Response = DigestResponse(credentials, "REGISTER", uri, challenge)
 	message, err := Parse([]byte("REGISTER " + uri + " SIP/2.0\r\nCSeq: 1 REGISTER\r\n" +
 		`Proxy-Authorization: Digest username="alice", realm="` + challenge.Realm +
 		`", nonce="` + challenge.Nonce + `", uri="` + uri + `", response="` + challenge.Response +
-		`", qop=auth, nc=00000001, cnonce="c"` + "\r\n\r\n"))
+		`", algorithm=SHA-256, qop=auth, nc=00000001, cnonce="c"` + "\r\n\r\n"))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -197,19 +214,45 @@ func TestProxyAuthorizationHeaderIsAccepted(t *testing.T) {
 	}
 }
 
-func TestDigestWithoutQOPIsSupported(t *testing.T) {
-	// RFC 2069 style, still emitted by some older clients.
+func TestVerifyRejectsUnsupportedDigestParameters(t *testing.T) {
+	for name, change := range map[string]struct{ old, replacement string }{
+		"MD5":               {"algorithm=SHA-256", "algorithm=MD5"},
+		"implicit MD5":      {", algorithm=SHA-256", ""},
+		"unknown algorithm": {"algorithm=SHA-256", "algorithm=SHA-1"},
+		"session variant":   {"algorithm=SHA-256", "algorithm=SHA-256-sess"},
+		"missing qop":       {", qop=auth", ""},
+		"unsupported qop":   {"qop=auth", "qop=auth-int"},
+		"missing cnonce":    {`, cnonce="cnonce1"`, ""},
+		"missing nc":        {", nc=00000001", ""},
+		"short nc":          {"nc=00000001", "nc=1"},
+		"invalid nc":        {"nc=00000001", "nc=0000000g"},
+		"zero nc":           {"nc=00000001", "nc=00000000"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			auth, _ := NewAuthenticator("vocat")
+			message := authorizedRegister(t, auth, testCredentials(), auth.Nonce())
+			header := strings.Replace(message.Get("Authorization"), change.old, change.replacement, 1)
+			message.Set("Authorization", header)
+			if got := auth.Verify(message, testCredentials(), "127.0.0.1:5060"); got != ResultReject {
+				t.Fatalf("Verify() = %v, want ResultReject for unsupported digest parameters", got)
+			}
+			parsed, err := ParseAuthorization(header)
+			if err != nil {
+				t.Fatalf("ParseAuthorization() error = %v", err)
+			}
+			if got := DigestResponse(testCredentials(), "REGISTER", message.URI, parsed); got != "" {
+				t.Fatalf("DigestResponse() = %q, want empty for unsupported digest parameters", got)
+			}
+		})
+	}
+}
+
+func TestVerifyAcceptsCaseInsensitiveAlgorithm(t *testing.T) {
 	auth, _ := NewAuthenticator("vocat")
-	credentials := testCredentials()
-	uri := "sip:vocat.local"
-	challenge := Challenge{Realm: auth.Realm(), Nonce: auth.Nonce(), Username: "alice", URI: uri}
-	challenge.Response = DigestResponse(credentials, "REGISTER", uri, challenge)
-	message, _ := Parse([]byte("REGISTER " + uri + " SIP/2.0\r\nCSeq: 1 REGISTER\r\n" +
-		`Authorization: Digest username="alice", realm="` + challenge.Realm +
-		`", nonce="` + challenge.Nonce + `", uri="` + uri +
-		`", response="` + challenge.Response + `"` + "\r\n\r\n"))
-	if got := auth.Verify(message, credentials, "1.2.3.4:5060"); got != ResultOK {
-		t.Fatalf("Verify() = %v, want ResultOK for qop-less digest", got)
+	message := authorizedRegister(t, auth, testCredentials(), auth.Nonce())
+	message.Set("Authorization", strings.Replace(message.Get("Authorization"), "algorithm=SHA-256", "algorithm=sha-256", 1))
+	if got := auth.Verify(message, testCredentials(), "127.0.0.1:5060"); got != ResultOK {
+		t.Fatalf("Verify() = %v, want ResultOK for a case-insensitive algorithm token", got)
 	}
 }
 
@@ -249,7 +292,7 @@ func TestChallengeHeaderIsWellFormed(t *testing.T) {
 		t.Fatalf("Realm() = %q, want the default", auth.Realm())
 	}
 	header := auth.ChallengeHeader()
-	for _, want := range []string{"Digest ", `realm="vocat"`, "nonce=", "algorithm=MD5", `qop="auth"`} {
+	for _, want := range []string{"Digest ", `realm="vocat"`, "nonce=", "algorithm=SHA-256", `qop="auth"`} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("ChallengeHeader() = %q, missing %q", header, want)
 		}
