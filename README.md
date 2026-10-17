@@ -1,195 +1,207 @@
-# 电话助手 (Telephony Assistant) — vocat plugin
+<div align="center">
+  <h1>电话助手 · Telephony Assistant</h1>
+  <p>为 VoCat 提供通话面板、来电规则、语音留言和 SIP 网关。</p>
+</div>
 
-vocat 本身已经有拨号盘、接听/挂断和来电通知。这个插件只补它没有的部分：
+<p align="center">
+  <a href="https://github.com/sunnyhmz7010/vocat-plugin-telephony/blob/main/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/sunnyhmz7010/vocat-plugin-telephony?color=3b82f6" alt="Go version" /></a>
+  <a href="https://github.com/sunnyhmz7010/vocat-plugin-telephony/blob/main/LICENSE"><img src="https://img.shields.io/github/license/sunnyhmz7010/vocat-plugin-telephony?color=10b981" alt="License" /></a>
+  <a href="https://github.com/sunnyhmz7010/vocat-plugin-telephony/actions/workflows/github-code-scanning/codeql"><img src="https://github.com/sunnyhmz7010/vocat-plugin-telephony/actions/workflows/github-code-scanning/codeql/badge.svg?branch=main" alt="CodeQL" /></a>
+</p>
 
-- **来电规则** — 有序策略，命中第一条即生效。黑白名单、号码前缀、联系人簿内/外、匿名号码。
-- **联系人簿** — 号码到姓名，通知和记录里显示姓名而不是裸号码。
-- **语音留言信箱** — 自动接听、播放提示音、录下对方留言、页面里回放和下载。
-- **通知模板** — 按事件（来电/拒接/接听/未接/留言/保号）自定义标题与正文，带渲染预览和真实测试推送。
-- **保号任务** — 小时级间隔，可选「仅在线路空闲 N 小时时才执行」。
-- **SIP 网关** — iPhone 等软话机（Linphone、Sessiontalk 等）注册进来，用 vocat 的 SIM
-  拨打和接听电话。拨号由网关转发到 vocat 的通话接口，语音经 RTP/G.711 桥接到模组。
+---
 
-## 0.1.4 修复：服务端模式无法开启
+## ✨ 为什么做这个插件
 
-`main.go` 从未注册 `/credentials` 路由——设置页「保存并连接」一直返回 404，服务端模式
-实际上无法通过面板开启，SIP 网关因此永远无法启动。0.1.4 已修复并重新验证了完整链路
-（登录 vocat → 启动网关 → UDP 监听）。如果你在 0.1.3 上遇到「网关无法启动」，升级即可。
+[VoCat](https://github.com/sunnyhmz7010/VoCat) 负责连接蜂窝模组并提供通话接口。电话助手把拨号、联系人、来电处理和音频回放放在一个面板中，并提供后台规则、语音信箱及软话机接入，方便在浏览器关闭后继续处理来电。
 
-## SIP 网关：让 iPhone 接入
+插件随 VoCat 启动，使用宿主的设备与 SIM；它不是独立电话服务，也不负责切换 eSIM 配置文件。
 
-前提：**服务端模式已开启**——网关必须能自己调用 vocat 的通话接口，没有凭据它不会启动。
+## 🚀 核心能力
 
-在插件的「SIP 网关」页签配置：启用、填 SIP 用户名/密码、选择承载通话的设备、监听地址
-（默认 `0.0.0.0:5060`，UDP）。保存后立即生效，无需重启插件。
+- **通话面板**：选择设备拨号、接听、挂断，通过浏览器麦克风接入通话。
+- **来电规则与联系人**：按顺序匹配号码、前缀、联系人、陌生或匿名来电，支持设备限定和规则试算。
+- **通话记录与录音**：后台收集通话状态，按方向、未接或录音筛选，回放、下载及清理录音。
+- **语音留言**：自动接听，播放本地 WAV 提示音，按静音或时长结束录制，设置容量与保留期。
+- **事件通知**：独立配置 Webhook、Telegram、PushPlus，编辑通知模板并预览或发送测试消息。
+- **保号任务**：按小时间隔拨号或发短信，可附加线路空闲时长条件。
+- **SIP 网关**：软话机通过 UDP 和 SHA-256 Digest 注册，使用选定设备的 SIM 拨打及接听电话。
 
-iPhone 端（以 Linphone 为例）：
+## ⚡ 快速开始
 
-| 设置项 | 值 |
+### 📋 前置要求
+
+- 已部署支持插件系统的 VoCat，目标主机为 Linux `arm64` 或 `amd64`；通话自动化需要可用的 VoWiFi 通道。
+- 在 VoCat 主机上开启开发者模式：执行 `sudo vocat develop on`，再按现有部署方式重启 VoCat，使插件入口生效。
+- 构建机具备 Git、Go **1.25.0 或更新的兼容版本**、Bash、`jq`、`zip`、`sed`、`awk`，以及 `shasum` 或 `sha256sum`。建议在 Linux 构建。
+- 浏览器语音需要 HTTPS 等安全上下文、麦克风授权，以及 Web Audio / AudioWorklet / WebSocket 支持；宿主嵌入页面也必须允许使用麦克风。
+
+### 📦 安装与运行
+
+当前从源码构建，版本由 [vocat-plugin.json](./vocat-plugin.json) 决定；`main` 中的修复可能晚于清单版本号。
+
+```bash
+git clone https://github.com/sunnyhmz7010/vocat-plugin-telephony.git
+cd vocat-plugin-telephony
+bash ./build.sh
+```
+
+脚本先运行测试，再交叉编译并生成两个包，同时打印 SHA-256。当前清单版本为 `0.1.4`：
+
+| VoCat 主机架构 | 插件包 |
 | --- | --- |
-| SIP 服务器 / Domain | 运行插件的主机 IP（如 `192.168.1.10`） |
-| 端口 | 监听地址里的端口（默认 `5060`） |
+| `aarch64` / `arm64` | `dist/telephony-assistant-0.1.4-linux-arm64.zip` |
+| `x86_64` / `amd64` | `dist/telephony-assistant-0.1.4-linux-amd64.zip` |
+
+在 VoCat 的 **系统设置 → 插件 → 上传插件包** 中选择对应架构的 ZIP，可填写脚本输出的 SHA-256 进行校验。启用后，从侧栏短信入口下方打开「电话助手」。后端由 VoCat 启动，无需另外运行二进制。
+
+**升级前备份插件数据目录。** 当前宿主要求先卸载再安装同名插件，卸载会删除该插件目录，包括 `data/` 中的配置、凭据、联系人、记录和音频。构建脚本也会清空并重建 `dist/`，不要在那里存放需保留的文件。
+
+## 📖 使用说明
+
+**先选择运行模式**
+
+| 模式 | 凭据与执行位置 | 使用范围 |
+| --- | --- | --- |
+| 面板模式，默认 | 手动通话使用浏览器当前 VoCat 会话，不保存管理员凭据 | 拨号、接听、挂断、浏览器语音及配置管理；页面关闭后面板逻辑停止 |
+| 服务端模式，主动开启 | 插件保存管理员凭据，并从本机登录 VoCat | 后台规则、通话记录收集、自动录音、留言、保号任务及 SIP 网关 |
+
+自动规则建议使用服务端模式。当前面板规则存在已知实现差异：「放行」可能触发接听，「接听」规则未执行，延迟接听也可能被跳过。请勿把面板规则视为与服务端等价；规则试算只检查匹配结果，不验证实际通话动作。
+
+开启服务端模式：进入「设置」，勾选「启用」，填写本机 VoCat 地址（默认 `https://127.0.0.1:7575`）、管理员账号密码和证书路径，再点「保存并连接」。确认状态显示会话有效后使用后台功能。客户端只接受 loopback 地址；优先配置证书，跳过证书校验需要在设置中明确启用。
+
+**拨号、记录与录音**
+
+在「拨号」选择设备并输入号码。通话接通后，点击「接入语音」并授权麦克风；接听本身不会自动打开麦克风。
+
+「通话记录」由插件后台轮询形成，可筛选未接或有录音的通话。「处理记录」记录规则动作与结果。两者不是完整的运营商通话账单：插件停止、服务端未连接或通话完全落在两次轮询之间时，可能没有记录。
+
+自动录音默认关闭，在「通话记录」中启用并选择录制方向、时长上限、总容量和保留期。录音内容取决于宿主媒体接口提供的音频，不保证完整保留双方音频或网络上的所有媒体包。
+
+**来电规则与联系人**
+
+先在「联系人」维护号码与姓名，再在「来电规则」按优先级排列规则，第一条命中即生效。服务端支持放行、拒接、接听和语音留言；接听及留言可以延迟执行。保存规则后用试算检查常用号码、陌生号码与匿名来电是否落入预期分支。
+
+号码按后 **9 位有效数字**比较，短于 9 位的号码整串匹配。例如 `+447700900123` 与 `07700900123` 可命中同一联系人；这种简化规则也可能把后 9 位相同的不同号码视为同一个号码。
+
+**语音留言**
+
+启用服务端模式后，在「语音留言」勾选「启用」，设置录制上限、静音时长、容量与保留期并保存，再添加动作设为「语音留言」的来电规则。
+
+提示音需手动放到插件数据目录，填写相对路径，例如 `greeting.wav`；格式为 **8000 Hz、单声道、16 位 PCM WAV**。界面不提供上传或文字转语音功能。路径留空会直接录音；文件缺失或播放失败时，当前实现会继续录制，因此配置后应实际拨入检查提示音。
+
+**通知模板与保号任务**
+
+「通知」中的通道独立于 VoCat 的通知配置。可为来电、拒接、接听、未接、留言和保号结果分别设置标题与正文，先预览再发送测试通知。
+
+例如，将标题设为 `未接来电：{{display}}`，正文设为 `设备 {{device_name}}，号码 {{caller}}，时间 {{time}}`。可用占位符：
+
+| 内容 | 占位符 |
+| --- | --- |
+| 来电与联系人 | `{{caller}}`、`{{number}}`、`{{contact}}`、`{{display}}`、`{{called}}` |
+| 设备 | `{{device_id}}`、`{{device_name}}` |
+| 处理结果 | `{{action}}`、`{{rule}}`、`{{duration}}`、`{{recording}}`、`{{result}}` |
+| 时间与事件 | `{{time}}`、`{{timestamp}}`、`{{event}}` |
+
+未知占位符会原样保留，便于发现拼写错误。
+
+「保号任务」支持电话或短信，按小时间隔调度，可限制为仅在线路空闲一定时长后执行。空闲判断依据当前插件进程观察到的通话活动，重启后会重新积累，不代表完整线路历史。需要切换 eSIM 的任务应使用宿主相应功能。
+
+**接入 SIP 软话机**
+
+先确认服务端模式已成功连接，再打开「SIP 网关」，启用网关，设置独立的 SIP 用户名与随机密码、承载通话的设备、监听地址及来源白名单。保存后网关会重新应用配置。
+
+| 客户端设置 | 配置要求 |
+| --- | --- |
+| 服务器 / Domain | VoCat 主机可达的 IP 地址 |
+| 端口 | 网关监听端口，默认 `5060` |
 | 传输 | UDP |
-| 用户名 / 密码 | 上面配置的 SIP 账号 |
-| Digest 认证算法 | SHA-256（RFC 8760） |
+| 用户名 / 密码 | 插件中配置的 SIP 账号，不是 VoCat 管理员账号 |
+| Digest 认证 | SHA-256，`qop=auth` |
+| 音频编码 | G.711 PCMA 或 PCMU，8000 Hz |
 
-客户端需支持 [RFC 8760](https://www.rfc-editor.org/rfc/rfc8760.html) 的 SHA-256 Digest
-认证。仅支持 MD5 的旧客户端需升级或更换；网关不回退到 MD5。
+客户端必须支持 [RFC 8760](https://www.rfc-editor.org/rfc/rfc8760.html) 的 SHA-256 Digest；仅支持 MD5 的旧客户端不能注册。注册列表出现终端后可尝试外呼；所选 SIM 来电时，已注册终端同时振铃，首个接听者建立通话。具体客户端版本需实际验证。
 
-注册成功后面板的「SIP 网关」页签会列出该设备。之后在软话机里拨任意号码即通过 SIM 外呼；
-SIM 上有来电时所有已注册的软话机会同时振铃，先接的赢。
+网关默认关闭，启用时默认监听 `0.0.0.0:5060`，会接收所有网卡上的请求。SIP 端口独立于 VoCat 的 HTTP 访问控制；建议只在受控内网使用，并配置 `allowed_sources` 为客户端 IP 或 CIDR，空白名单不限制来源。网关实施 Digest 认证和失败锁定，但未提供 SIP TLS / SRTP。请使用密码管理器生成的高熵随机密码：SHA-256 Digest 仍存在抓包后的离线弱口令猜测风险，在线失败锁定不能消除它。[RFC 7616 §5.1](https://www.rfc-editor.org/rfc/rfc7616.html#section-5.1)
 
-安全须知（和网关代码注释一致）：
+## 🧠 功能细节
 
-- SIP 端口**不经过** vocat 的访问控制，鉴权由网关自己实现：digest 认证强制开启，
-  另有来源白名单（`allowed_sources`，建议填你手机所在网段）和登录失败锁定。
-- 使用密码管理器生成的随机 SIP 密码。SHA-256 Digest 仍无法阻止抓包后的离线弱口令猜测。
-- 监听 `0.0.0.0` 会暴露到所有网卡。公网暴露的 SIP 端口会在数小时内被扫描，
-  被破解意味着别人可以用你的 SIM 打电话。只在内网使用，或把白名单收窄到单个 IP。
-- 网关不发送 DTMF：vocat 没有拨号按键通道，SDP 里刻意不声明 `telephone-event`，
-  话机会回落到带内音（对语音菜单类系统仍然有效）。
+- **宿主与插件边界**：VoCat 反向代理会移除会话 Cookie、CSRF 与 Authorization 头，插件后端因此需要单独登录才能操作通话；手动通话由浏览器直接使用当前会话。
+- **后台执行**：每秒轮询可用设备的通话，仅对具有稳定通话 ID 的 VoWiFi 状态执行自动规则；跳过未运行设备及 `wifi_410`。保号任务按分钟检查是否到期。
+- **数据落盘**：状态保存在 `VOCAT_PLUGIN_DATA_DIR` 下的 JSON 文件。管理员密码、SIP 密码和通知密钥为明文存储，读取接口返回掩码；Linux 状态文件写入权限为 `0600`，这不等于加密。备份同样包含敏感数据。
+- **会话恢复**：复用已登录会话，遇到 401 尝试重新登录一次；遇到 429 按 `Retry-After` 抑制后续登录，避免连续重试。
+- **音频路径**：浏览器通过 AudioWorklet 转换 PCM，SIP 网关通过 RTP/G.711 与宿主音频 WebSocket 桥接。留言与录音按容量和保留期清理。
+- **前端部署**：原生 HTML/CSS/JavaScript 随插件打包，不依赖 CDN 或 npm 构建。删除确认使用页面内按钮，适配宿主 iframe 的弹窗限制。
+- **当前限制**：拨号键盘只编辑号码，通话中不发送 DTMF；SIP 不声明 `telephone-event`。客户端自行产生的带内音能否用于语音菜单，取决于客户端与线路。拒接通过宿主挂断接口执行，插件不提供自定义 SIP 拒接码。
 
-## 两种运行模式，必须先理解这一点
+## 🧱 技术栈
 
-vocat 的插件反向代理会**主动剥掉 session cookie、CSRF token 和 Authorization 头**
-（`internal/extensions/manager.go`）。所以插件后端拿不到任何凭据，默认情况下它无法自己
-调用 `/calls/answer`。
+- 后端：Go 1.25，标准库 HTTP 服务与 JSON 文件存储。
+- WebSocket：[`github.com/coder/websocket`](https://github.com/coder/websocket)。
+- 前端：原生 HTML、CSS、JavaScript、Web Audio 和 AudioWorklet。
+- 通信与音频：SIP/UDP、SHA-256 Digest、RTP/G.711、8000 Hz PCM/WAV。
+- 构建：Bash、`jq`、`zip`；`CGO_ENABLED=0` 交叉编译。
+- 目标平台：Linux `arm64` / `amd64`，由 VoCat 插件系统管理生命周期。
 
-**面板模式（默认）** — 规则由浏览器里的这个页面执行，用你自己的会话调 vocat 的接口。
-关掉页面就失效。不需要任何凭据，风险最低。
+## 🗂️ 项目结构
 
-**服务端模式（需显式开启）** — 你在「设置」里填 vocat 管理员账号密码，插件后端自己登录
-vocat，从而在浏览器关闭时也能拒接、接听和录留言。
+```text
+vocat-plugin-telephony/
+├── .github/             # Issue 表单与 PR 模板
+├── main.go              # HTTP 接口、配置与网关生命周期
+├── vocat-plugin.json    # 插件清单、权限、入口与架构映射
+├── build.sh             # 测试、交叉编译与 ZIP 打包
+├── internal/
+│   ├── contacts/        # 联系人及号码归一化
+│   ├── engine/          # 轮询、规则执行、录音与保号调度
+│   ├── media/           # 宿主音频 WebSocket
+│   ├── notify/          # 模板与通知通道
+│   ├── recorder/        # 通话音频录制
+│   ├── rtp/             # RTP 会话与 G.711 编解码
+│   ├── rules/           # 有序来电策略
+│   ├── sip/             # SIP 消息与 Digest 认证
+│   ├── sipgw/           # 注册、呼入呼出与音频桥接
+│   ├── store/           # 配置、通话记录与留言索引
+│   ├── vocat/           # 宿主 API 与会话管理
+│   ├── voicemail/       # 留言录制接口
+│   └── wav/             # WAV 读写
+├── web/                 # 面板、浏览器语音及 AudioWorklet
+├── CONTRIBUTING.md      # 开发与贡献指南
+├── SECURITY.md          # 安全报告渠道
+└── LICENSE              # GPL-3.0
+```
 
-服务端模式是**真实的权限提升**：插件获得完整管理员权限。具体防护：
+## 👨‍💻 本地开发
 
-- 密码以 `0600` 权限存在插件数据目录，读取接口永远返回 `********`
-- 客户端**强制只连 loopback**，填公网或内网地址会直接拒绝
-- 一次登录缓存整个会话周期（vocat 的 bcrypt cost 是 12，每次登录约 200–500ms CPU）
-- 遇到 401 自动重登录一次（vocat 在改密码或应用更新时会吊销全部会话）
-- 遇到 429 记录 `Retry-After` 并停止尝试 —— vocat 的登录限流键是 **IP + 用户名**，
-  和你本人共享，硬撞会把你自己锁在外面 10 分钟
+### 🧰 环境
 
-**语音留言只在服务端模式下可用**，因为录音需要后端持有音频 WebSocket，而那需要一个
-它在面板模式下没有的会话。面板模式下遇到 voicemail 规则会提示并改为放行。
+使用 Go 1.25.0 或更新的兼容版本；打包工具同「快速开始」。前端无需安装 npm 依赖。完整测试优先使用 Linux，SIP/RTP 测试需要本机 UDP 通信正常。
 
-## 安装
+插件后端由宿主提供 `VOCAT_PLUGIN_LISTEN` 与 `VOCAT_PLUGIN_DATA_DIR`；直接运行而未配置这两个变量会退出。开发测试服务仅监听 `127.0.0.1` 或 `::1`。
+
+### ⚙️ 命令
+
+在仓库根目录执行：
 
 ```bash
-./build.sh
-```
-
-生成两个按架构分开的包：
-
-- `dist/telephony-assistant-0.1.0-linux-arm64.zip` — 用这个，你的服务器是 aarch64
-- `dist/telephony-assistant-0.1.0-linux-amd64.zip`
-
-然后 **系统设置 → 插件 → 上传插件包**，可以把脚本打印的 SHA-256 一起填进去让服务端校验。
-入口出现在**左侧导航「短信检测」下方**。
-
-> 侧栏位置由清单里的 `contributions[].after` 决定，它必须**精确等于** vocat 某个导航项的
-> 键名。原版 vocat 的键只有 `dashboard`、`devices`、`proxy`、`sms`、`automatic-tasks`、
-> `logs`、`settings` 七个。写一个不存在的键（例如 `calls`）不会报错，插件条目会**静默消失** ——
-> `AuthenticatedShell.tsx` 遍历导航项时一次都匹配不上。
-
-前提：vocat 开启了开发者模式（`sudo vocat develop on` 后重启）。
-
-vocat 不允许覆盖安装，升级要先卸载。卸载会删掉插件的 `data/`，也就是规则、联系人、
-留言和凭据。
-
-## 架构
-
-```
-浏览器面板 ──fetch──> /api/extensions/telephony-assistant/backend/*  ──> 插件后端
-    │                (vocat 反代，剥掉凭据)                              │
-    │                                                        服务端模式下自行登录
-    └──fetch──> /api/devices/{id}/calls/answer|hangup  (面板模式，用你的会话)
-```
-
-## 目录
-
-```
-vocat-plugin.json        清单（必须在 ZIP 根目录）
-main.go                  后端 HTTP 服务，15 个接口
-internal/vocat/          vocat API 客户端：登录、会话、CSRF、401 重登录、限流退避
-internal/rules/          来电规则引擎，有序匹配
-internal/contacts/       联系人簿与号码归一化
-internal/voicemail/      WS 音频桥接、提示音播放、WAV 读写、静音检测
-internal/notify/         模板渲染 + webhook/Telegram/PushPlus
-internal/store/          配置、留言索引、处理记录（JSON 文件，0600）
-internal/engine/         轮询通话、执行规则、保号调度
-web/panel.html           界面
-web/panel.js             界面逻辑，含面板模式的规则执行
-build.sh                 交叉编译并分架构打包
-```
-
-面板不用任何依赖：插件页面的 CSP 是 `default-src 'self'; connect-src 'self'`，
-任何 CDN、外部字体或远程脚本都会被拦掉。
-
-面板也**不使用 `window.confirm`**：vocat 用
-`sandbox="allow-scripts allow-forms allow-same-origin"` 嵌入插件页，这个白名单没有
-`allow-modals`，`confirm()` 会立即返回 false 且不弹窗。删除确认是行内按钮。
-
-## 号码匹配
-
-按**后 9 位有效数字**比较，所以 `+447700900123`、`447700900123`、`07700900123`、
-`+44 7700 900123` 都视为同一人。短于 9 位的号码（服务号、短代码）整串精确匹配，
-不会被长号码的后缀误命中。
-
-## 通知占位符
-
-`{{caller}}` `{{number}}` `{{contact}}` `{{display}}` `{{called}}` `{{device_id}}`
-`{{device_name}}` `{{action}}` `{{rule}}` `{{duration}}` `{{recording}}` `{{result}}`
-`{{time}}` `{{timestamp}}` `{{event}}`
-
-写错的 `{{名字}}` 会原样保留，这样错误在收到的消息里看得见，而不是变成空白。
-
-插件用自己的推送通道，不复用 vocat 的：vocat 唯一对插件开放的发送路径是设置页的
-「测试」接口，正文是硬编码的，而 `GET /api/settings/notifications` 返回的每个密钥都是
-`********`。
-
-## vocat 缺失的能力，插件绕不过去
-
-**1. 无法自定义拒接原因。** vocat 对响铃中来电的挂断硬编码为 **SIP 486 Busy Here**
-（`internal/vowifi/ims/call_runtime.go:308`），没有 API 能发 603 Decline。
-
-**2. 没有 DTMF。** vocat 全代码库零 DTMF 实现，SDP 里协商了 `telephone-event`
-但没有发送路径。按键交互的 IVR 做不了。
-
-**3. 没有语音合成。** 留言提示音只能是你上传的 **8000 Hz 单声道 16 位 WAV**，
-放在插件数据目录里，在「语音留言」页填相对路径。格式不符会被拒绝，因为格式不对的
-提示音在真实通话里会变成噪音。
-
-**4. 只有 VoWiFi 通道能应用规则。** 蜂窝通道（`transport: "cellular"`）返回的是
-AT 命令解析出的整数状态，没有稳定的 call id，规则无法可靠作用其上。
-
-**5. 原版 vocat 没有通话记录页，也没有 `/api/calls/history`。** 插件的「处理记录」
-只记录它自己做过的决定（谁打来、命中哪条规则、执行结果），不是 vocat 的通话明细。
-留言列表同理，是插件自己的信箱。
-
-插件运行只依赖原版就有的接口：`/api/auth/login`、`/api/auth/session`、`/api/devices`、
-`/api/devices/{id}/calls`、`/calls/answer`、`/calls/hangup`、`/calls/media`、`/api/sms/send`。
-
-## 与 vocat 内置自动任务的重叠
-
-vocat 的「自动任务」已经支持按天的 per-ICCID 拨号和短信，并且会自动切 eSIM 配置文件、
-强制 IMS 环境、失败重试、事后恢复（`internal/server/automatic_tasks.go`）。
-
-这个插件的保号任务**只做它表达不了的部分**：小时级间隔，以及「线路空闲多久才执行」。
-**需要切卡的保号请继续用 vocat 的自动任务**，插件没有重做那套逻辑。
-
-## 测试
-
-```bash
+go vet ./...
 go test ./...
+go build -o bin/telephony-dev .
+bash ./build.sh
 ```
 
-7 个包全绿。覆盖：号码归一化与跨格式匹配、规则有序匹配与设备限定、
-匿名与陌生号码不重叠、fallback 默认放行、留言 WAV 读写往返与格式校验、
-静音门限、模板占位符全替换与未知占位符保留、webhook SSRF 防护、
-密码掩码与「保存掩码即保留原值」、留言配额与保留期清理、
-凭据只允许 loopback、401 重登录、429 不重试。
+修改 Go 文件后运行 `gofmt`。Windows 下文件权限与 Unix 绝对路径测试有已知平台差异；请在验证记录中注明失败或跳过项，不将部分测试通过描述为全套通过。具体要求见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-后端接口也实测过：规则试算五种号码全部命中预期分支、配置越界值被正确 clamp、
-未知 JSON 字段返回 400、方法守卫返回 405、状态文件权限 `0600`、
-非 loopback 地址被拒绝且错误如实上报到面板。
+问题反馈和功能建议请使用 [Issue 表单](https://github.com/sunnyhmz7010/vocat-plugin-telephony/issues/new/choose)，附插件及 VoCat 版本、运行模式和脱敏后的复现信息。
+
+## 🔐 安全报告
+
+如果发现安全问题，请不要公开披露细节。请优先参考仓库中的 [SECURITY.md](./SECURITY.md) 提交安全报告。
+
+## 📄 许可证
+
+本项目基于 [GPL-3.0](./LICENSE) 开源。
+
+<div align="center">
+  <sub>Built with ❤️ by Sunny</sub>
+</div>
