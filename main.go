@@ -1,4 +1,4 @@
-// Command telephony is the backend of the vocat "电话助手" plugin.
+// Command telephony is the backend of the VoCat Telephony plugin.
 //
 // vocat already has a dialpad, answer/hangup, call history, recording and
 // incoming-call notifications. This plugin adds the parts vocat has no place

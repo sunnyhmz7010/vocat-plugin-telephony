@@ -38,7 +38,7 @@ for arch in "${ARCHES[@]}"; do
   cp web/panel.html web/panel.js web/callAudio.js \
      web/call-capture-processor.js web/call-playback-processor.js "$stage/web/"
 
-  package="$PWD/$OUT/telephony-assistant-$VERSION-linux-$arch.zip"
+  package="$PWD/$OUT/telephony-$VERSION-linux-$arch.zip"
   # -X drops extended attributes and __MACOSX entries, which vocat's extractor
   # rejects as unsafe paths.
   (cd "$stage" && zip -q -r -X "$package" vocat-plugin.json web bin)

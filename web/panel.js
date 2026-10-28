@@ -1,4 +1,4 @@
-/* Panel for the vocat telephony assistant plugin.
+/* Panel for the VoCat Telephony plugin.
  *
  * Two things shape this file.
  *
@@ -14,7 +14,7 @@
  */
 "use strict";
 
-var BACKEND = "/api/extensions/telephony-assistant/backend";
+var BACKEND = "/api/extensions/telephony/backend";
 /* Panel-mode polling. One second is fast enough to reject or answer before a
  * typical caller gives up, and the endpoint reads in-memory state. */
 var POLL_MS = 1000;
@@ -909,7 +909,7 @@ function applyPanelDecision(device, call) {
     }
     if (decision.action === "voicemail") {
       notice("ruleNotice", "warn", "规则要求转语音留言，但当前未开启服务端模式，无法执行留言动作（来电 " +
-        esc(call.number) + "）已保持 ringing 状态。如需自动留言，请在电话助手设置中启用服务端模式。");
+        esc(call.number) + "）已保持 ringing 状态。如需自动留言，请在 Telephony 设置中启用服务端模式。");
       return null;
     }
     return null;
